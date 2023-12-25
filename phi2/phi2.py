@@ -22,7 +22,7 @@ class ModelArgs:
     rotary_dim: int = 32
 
 
-class LayerNorm(nn.Module):
+class LayerNorm(nn.LayerNorm):
     def __call__(self, x: mx.array) -> mx.array:
         return super().__call__(x.astype(mx.float32)).astype(x.dtype)
 
@@ -185,7 +185,7 @@ def load_model(model_path: str):
     model = Phi2(ModelArgs())
     model_path = Path(model_path)
     with open(model_path / "config.json", "r") as f:
-        config = json.load(f.read())
+        config = json.loads(f.read())
         config.pop("model_type", None)
         quantization = config.pop("quantization", None)
     weights = mx.load(str(model_path / "weights.npz"))
