@@ -44,6 +44,15 @@ def precompute_theta_pos_frequencies(head_dim: int, seq_len: int, device: str, t
     # According to the formula: theta_i = 10000 ^ (-2(i-1)/d) for i 
     # shape: (head_dim // 2)
     theta_pos = torch.arange(start=0, end=head_dim, step=2, device=device).float()
+    theta = 1.0 / (theta ** (theta_pos / head_dim)).to(device)
+    # Construct the frequencies (the 'm' parameter)
+    # Shape: (seq_len)
+    m = torch.arange(seq_len, device=device).float()
+    # Multiply each theta by each position using the outer product
+    # Shape: (seq_len) outer_product* head_dim // 2 - > (seq_len, head_dim // 2)
+    freqs = torch.outer(input=m, vec2=theta).float()
+    
+
 
 
 
