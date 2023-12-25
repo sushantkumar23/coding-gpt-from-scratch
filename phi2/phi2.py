@@ -139,7 +139,7 @@ class OutputHead(nn.Module):
 class Phi2(nn.Module):
 
     def __init__(self, config: ModelArgs):
-        self.wte = nn.Embedding(num_embeddings=config.num_vocab, embedding_dim=config.model_dim)
+        self.wte = nn.Embedding(num_embeddings=config.num_vocab, dims=config.model_dim)
         self.transformer = TransformerDecoder(config=config)
         self.lm_head = OutputHead(config=config)
 
@@ -201,13 +201,13 @@ def load_model(model_path: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phi-2 inference script")
     parser.add_argument(
-        name="--model-path",
+        "--model-path",
         default="mlx_model",
         type=str,
         help="Path to model weights"
     )
     parser.add_argument(
-        name="--prompt",
+        "--prompt",
         default="Write a detailed analogy between mathematics and a lighthouse",
         help="Message to be processed by the model"
     )
