@@ -1,11 +1,12 @@
 # mistral.py
-
+import json
 from pathlib import Path
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
 
 import mlx.core as mx
 import mlx.nn as nn
+from mlx.utils import tree_unflatten
 from sentencepiece import SentencePieceProcessor
 
 @dataclass
@@ -213,3 +214,43 @@ class Tokenizer(nn.Module):
         if t and self._model.id_to_piece(t[0])[0] == self._sep:
             return " " + out
         return out
+
+
+def load_model(folder: str):
+    model_path = Path(folder)
+    tokenizer = Tokenizer(str(model_path / "tokenizer.model"))
+    with open(model_path / "config.json", "r") as f:
+        config = json.loads(f.read())
+        config.pop("sliding_window", None)
+        config.pop("model_type", None)
+        quantization = config.pop("quantization", None)
+        model_args = ModelArgs(**config)
+    weights = mx.load(str(model_path / "weights.npz"))
+    weights = tree_unflatten(list(weights.items()))
+    model = Mistral(model_args)
+    if quantization is not None:
+        nn.QuantizedLinear.quantize_module(
+            model=model,
+            group_size=quantization["group_size"],
+            bits=quantization["bits"]
+        )
+    model.update(weights)
+    mx.eval(model.parameters())
+    return model, tokenizer
+
+
+def generate(prompt: mx.array, model: Mistral, temp: Optional[float] = 0.0):
+    def sample(logits):
+        if temp == 0:
+            return mx.argmax(logits, axis=-1)
+        else:
+            return mx.random.categorical(logits * (1 / temp))
+    
+    logits, cache = model(inputs=prompt[None])
+    y = sample(logits[:, -1, :])
+    yield y
+
+    while True:
+        logits, cache = model(inputs=y[:, None], cache=cache)
+        y = sample(logits.squeeze(1))
+        yield y
