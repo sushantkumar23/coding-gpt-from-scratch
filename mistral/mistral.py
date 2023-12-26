@@ -54,7 +54,7 @@ class Attention(nn.Module):
         self.wk = nn.Linear(input_dims=args.dim, output_dims=args.n_kv_heads * args.head_dim, bias=False)
         self.wv = nn.Linear(input_dims=args.dim, output_dims=args.n_kv_heads * args.head_dim, bias=False)
         self.wo = nn.Linear(input_dims=args.n_heads * args.head_dim, output_dims=args.dim, bias=False)
-        self.rope = nn.RoPE(dims=args.head_dim, base=args.rope_theta, traditional=False)
+        self.rope = nn.RoPE(dims=args.head_dim, base=args.rope_theta, traditional=True)
 
     def __call__(
             self,
@@ -122,7 +122,7 @@ class FeedForward(nn.Module):
         self.w2 = nn.Linear(input_dims=args.hidden_dim, output_dims=args.dim, bias=False)
         self.w3 = nn.Linear(input_dims=args.dim, output_dims=args.hidden_dim, bias=False)
 
-    def __call__(self, x: mx.array):
+    def __call__(self, x: mx.array) -> mx.array:
         # x: (batch, seq_len, dim)
         # nn.silu(self.w1(x)): x(batch, seq_len, dim) x w1(dim, hidden_dim) -> (batch, seq_len, hidden_dim)
         # self.w3(x): x(batch, seq_len, dim) x w3(dim, hidden_dim) -> (batch, seq_len, hidden_dim)
@@ -141,7 +141,7 @@ class TransformerBlock(nn.Module):
         self.attention = Attention(args=args)
         self.feed_forward = FeedForward(args=args)
         self.attention_norm = RMSNorm(dims=args.dim, eps=args.norm_eps)
-        self.ff_norm = RMSNorm(dims=args.dim, eps=args.norm_eps)
+        self.ffn_norm = RMSNorm(dims=args.dim, eps=args.norm_eps)
         self.args = args
 
     def __call__(
@@ -152,7 +152,7 @@ class TransformerBlock(nn.Module):
     ) -> mx.array:
         r, cache = self.attention(x=self.attention_norm(x), mask=mask, cache=cache)
         h = x + r
-        r = self.feed_forward(self.ff_norm(h))
+        r = self.feed_forward(self.ffn_norm(h))
         out = h + r
         return out, cache
 
