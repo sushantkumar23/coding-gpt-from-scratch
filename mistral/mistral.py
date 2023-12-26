@@ -84,7 +84,7 @@ class Attention(nn.Module):
             # a.reshape([batch, self.n_heads, seq_len, -1]): (batch, n_heads, seq_len, head_dim)
             return a.reshape([B, self.n_heads, L, -1])
 
-        key, values = map(repeat, (keys, values))
+        keys, values = map(repeat, (keys, values))
 
         if cache is not None:
             # (batch, num_heads, seq_len, head_dim) -> 2 x (batch, num_heads cache_len, head_dim)
