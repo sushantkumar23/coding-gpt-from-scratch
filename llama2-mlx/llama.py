@@ -1,4 +1,5 @@
 # llama.py
+import time
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
@@ -195,5 +196,54 @@ class Llama(nn.Module):
             else:
                 return mx.random.categorical(logits * (1 / temp))
 
-        cache = []
+        caches = []
 
+        # Make an additive causal mask, needed for processing the prompt
+        mask = nn.MultiHeadAttention.create_additive_causal_mask(N=x.shape[1])
+        mask = mask.astype(self.tok_embeddings.weight.dtype)
+
+        # First we process the prompt x the same way as in the __call__
+        # save the caches in cache
+        x = self.tok_embeddings(x)
+        for layer in self.layers:
+            x, c = layer(x=x, mask=mask)
+            # We store the cache for each layer
+            caches.append(c)
+        x = self.norm(x)
+        # Only the last logits are needed
+        y = self.output(x[:, -1])
+        y = sample(y)
+
+        # y now has the size [1]
+        # Since MLX is lazily evaluated nothing is computed yet.
+        # Calling y.item() would force the computation to happen at
+        # this point but we can also choose not to do that and let the
+        # user choose when to start the computation.
+        yield y
+
+        # Now we parsed the prompt and generated the first token we
+        # need to feed it back into the model and continue generating
+        # the rest of the sequence.
+        while True:
+            # Unsqueeze the last dimension to add a sequence dimension
+            # of 1
+            y = y[:, None]
+
+            x = self.tok_embeddings(y)
+            for layer, cache in zip(self.layers, caches):
+                # We are overwriting the arrays in the cache list. When
+                # the computation will happen, MLX will be discarding
+                # the old cache the moment it is not needed anymore.
+                x, cache = layer(x=x, mask=mask, cache=cache)
+            x = self.norm(x)
+            y = sample(self.output(x[:, -1]))
+
+            yield y
+
+
+def tic():
+    return time.time()
+
+def toc(msg, start):
+    end = time.time()
+    return (f"[INFO] {msg}: {end - start:.3f} seconds")
