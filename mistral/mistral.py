@@ -1,5 +1,7 @@
 # mistral.py
+import time
 import json
+import argparse
 from pathlib import Path
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
@@ -254,3 +256,73 @@ def generate(prompt: mx.array, model: Mistral, temp: Optional[float] = 0.0):
         logits, cache = model(inputs=y[:, None], cache=cache)
         y = sample(logits.squeeze(1))
         yield y
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Mistral inference script")
+    parser.add_argument(
+        "--model-path",
+        default="mlx_model",
+        type=str,
+        help="The path to the model weights and tokenizer"
+    )
+    parser.add_argument(
+        "--prompt",
+        default="In the beginning, the universe was created.",
+        type=str,
+        help="The prompt to be processed by the model"
+    )
+    parser.add_argument(
+        "--max-tokens",
+        "-m",
+        default=100,
+        type=int,
+        help="Maximum number of tokens to generate"
+    )
+    parser.add_argument(
+        "--temp",
+        default=0.0,
+        type=float,
+        help="Temperature for sampling"
+    )
+    parser.add_argument(
+        "--tokens_per_eval",
+        default=10,
+        type=int,
+        help="The batch size of tokens to generate"
+    )
+    parser.add_argument("--seed", default=0, type=int, help="The PRNG seed")
+
+    args = parser.parse_args()
+
+    mx.random.seed(args.seed)
+    print("[INFO] Loading the model from the disk")
+    model, tokenizer = load_model(args.model_path)
+
+    print("[INFO] Starting the generation process")
+    tic = time.time()
+    print(args.prompt, end="", flush=True)
+    prompt = mx.array(tokenizer.encode(args.prompt))
+    tokens = []
+    for token, ntoks in zip(generate(prompt, model, args.temp), range(args.max_tokens)):
+        tokens.append(token)
+
+        if ntoks == 0:
+            mx.eval(tokens)
+            toc = time.time()
+            prompt_tps = prompt.size / (toc - tic)
+            tic = time.time()
+
+        if (len(tokens) % args.tokens_per_eval) == 0:
+            mx.eval(tokens)
+            s = tokenizer.decode([t.item() for t in tokens])
+            print(s, end="", flush=True)
+            tokens = []
+    
+    mx.eval(tokens)
+    s = tokenizer.decode([t.item() for t in tokens])
+    print(s, flush=True)
+    print("-------")
+    generation_tps = ntoks / (time.time() - toc)
+    print(f"Prompt TPS: {prompt_tps:.3f}")
+    print(f"Generation TPS: {generation_tps:.3f}")
