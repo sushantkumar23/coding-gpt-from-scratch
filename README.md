@@ -1,11 +1,9 @@
-# LLMs built from scratch
+# LLMs built from scratch in Pytorch and MLX
 
-Building LLMs from scratch in pytorch.
+Popular SoTA LLMs built from scratch in Pytorch and MLX (Apple). This is helpful to those seeking to understand the underlying architecture. Helpful for those who want to build their own LLMs in foundation frameworks like Pytorch and MLX.
 
-The trending LLMs are built from scratch in pytorch. This helps in understanding the barebones and understanding the fundamental difference between the various open-source LLMs.
-
-1. BERT
-2. GPT2
-3. Mistral
+1. Llama (Pytorch + MLX)
+2. GPT2 (Pytorch)
+3. Mistral (MLX)
 4. Mixtral
-5. Phi2
+5. Phi2 (MLX)
