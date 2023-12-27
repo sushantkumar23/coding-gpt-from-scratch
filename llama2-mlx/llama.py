@@ -94,7 +94,7 @@ class Attention(nn.Module):
             # mx.expand_dims(a, 2): (batch n_kv_heads, 1, seq_len, head_dim)
             # mx.concatenate(..., axis=2): (batch, n_kv_heads, repeats, seq_len, head_dim)
             a = mx.concatenate([mx.expand_dims(a, 2)] * self.repeats, axis=2)
-            return a.reshape(newshape=[B, self.n_heads, L, -1])
+            return a.reshape([B, self.n_heads, L, -1])
 
         keys, values = map(repeat, (keys, values))
 
@@ -123,7 +123,7 @@ class Attention(nn.Module):
         # scores @ values -> (batch, n_heads, seq_len, seq_len) @ (batch, n_heads, seq_len, head_dim) -> (batch, n_heads, seq_len, head_dim)
         # (...).transpose(0, 2, 1, 3) -> (batch, seq_len, n_heads, head_dim)
         # (...).reshape(B, L, -1) -> (batch, seq_len, dim)
-        output = (scores @ values).transpose(0, 2, 1, 3).reshape(newshape=[B, L, -1])
+        output = (scores @ values).transpose(0, 2, 1, 3).reshape(B, L, -1)
         # wo(dim, dim) * output(batch, seq_len, dim) -> (batch, seq_len, dim)
         return self.wo(output), (keys, values)
 
@@ -185,7 +185,7 @@ class Llama(nn.Module):
     def __call__(self, x):
         # x: (batch, seq_len)
         B, L, D = x.shape
-        mask = nn.MultiHeadAttention.create_additive_causal_mask(N=L)
+        mask = nn.MultiHeadAttention.create_additive_causal_mask(N=x.shape[1])
         mask = mask.astype(self.tok_embeddings.weight.dtype)
 
         # (batch, seq_len) -> (batch, seq_len, dim)
@@ -195,9 +195,9 @@ class Llama(nn.Module):
         x = self.norm(x)
         return self.output(x)
 
-    def generate(self, x, temp = 1.0):
+    def generate(self, x, temp: float = 1.0):
         def sample(logits):
-            if temp == 0:
+            if temp == 0.0:
                 return mx.argmax(logits, axis=-1)
             else:
                 return mx.random.categorical(logits * (1 / temp))
@@ -240,7 +240,7 @@ class Llama(nn.Module):
                 # We are overwriting the arrays in the cache list. When
                 # the computation will happen, MLX will be discarding
                 # the old cache the moment it is not needed anymore.
-                x, cache = layer(x=x, mask=mask, cache=cache)
+                x, cache = layer(x=x, mask=None, cache=cache)
             x = self.norm(x)
             y = sample(self.output(x[:, -1]))
 
@@ -300,7 +300,7 @@ def sanitize_config(config, weights):
     if "hidden_dim" not in config:
         # TODO: Check if this is correct
         config["hidden_dim"] = weights["layers.0.feed_forward.w1.weight"].shape[0]
-    if "vocab_size" not in config:
+    if config.get("vocab_size", -1) < 0:
         config["vocab_size"] = weights["output.weight"].shape[0]
     if "rope_theta" not in config:
         config["rope_theta"] = 10_000
@@ -360,7 +360,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--prompt",
-        default="In the beginning the universe was created",
+        default="In the beginning the Universe was created",
         type=str,
         help="The prompt to be used for generation. Ignored if --few-shot is provided"
     )
@@ -379,7 +379,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--temp",
-        default=0.0,
+        default=1.0,
         type=float,
         help="The sampling temperature"
     )
