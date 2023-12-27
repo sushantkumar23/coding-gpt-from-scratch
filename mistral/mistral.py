@@ -62,12 +62,12 @@ class Attention(nn.Module):
             mask: Optional[mx.array] = None,
             cache: Optional[Tuple[mx.array, mx.array]] = None
         ):
-        # (batch, seq_len, dims) -> (batch, seq_len, dims)
+        # (batch, seq_len, dim) -> (batch, seq_len, dim)
         B, L, D = x.shape
 
-        # queries: x(batch, seq_len, dims) x wq(dims, n_heads * head_dim) -> (batch, seq_len, n_heads * head_dim)
-        # keys: x(batch, seq_len, dims) x wk(dims, n_kv_heads * head_dim) -> (batch, seq_len, n_kv_heads * head_dim)
-        # values: x(batch, seq_len, dims) x wv(dims, n_kv_heads * head_dim) -> (batch, seq_len, n_kv_heads * head_dim)
+        # queries: wq(n_heads * head_dim, dim) * x(batch, seq_len, dim) -> (batch, seq_len, n_heads * head_dim)
+        # keys: wk(n_kv_heads * head_dim, dim) * x(batch, seq_len, dim) -> (batch, seq_len, n_kv_heads * head_dim)
+        # values: wv(n_kv_heads * head_dim, dim) * x(batch, seq_len, dim) x  -> (batch, seq_len, n_kv_heads * head_dim)
         queries, keys, values = self.wq(x), self.wk(x), self.wv(x)
 
         # Prepare the queries, keys and values for the attention computation
@@ -124,8 +124,8 @@ class FeedForward(nn.Module):
 
     def __call__(self, x: mx.array) -> mx.array:
         # x: (batch, seq_len, dim)
-        # nn.silu(self.w1(x)): x(batch, seq_len, dim) x w1(dim, hidden_dim) -> (batch, seq_len, hidden_dim)
-        # self.w3(x): x(batch, seq_len, dim) x w3(dim, hidden_dim) -> (batch, seq_len, hidden_dim)
+        # nn.silu(self.w1(x)): w1(hidden_dim, dim) * x(batch, seq_len, dim) x  -> (batch, seq_len, hidden_dim)
+        # self.w3(x): w3(hidden_dim, dim) * x(batch, seq_len, dim) -> (batch, seq_len, hidden_dim)
         # inner product:
         # (... * self.w3(x)): (batch, seq_len, hidden_dim) x (batch, seq_len, hidden_dim) -> (batch, seq_len, hidden_dim)
         # self.w2(...): (batch, seq_len, hidden_dim) x w2(hidden_dim, dim) -> (batch, seq_len, dim)
