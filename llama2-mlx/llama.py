@@ -1,10 +1,15 @@
 # llama.py
 import time
+import glob
+import json
+from pathlib import Path
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
 import mlx.core as mx
 import mlx.nn as nn
+from mlx.utils import tree_unflatten
+from sentencepiece import SentencePieceProcessor
 
 @dataclass
 class ModelArgs:
@@ -247,3 +252,98 @@ def tic():
 def toc(msg, start):
     end = time.time()
     return (f"[INFO] {msg}: {end - start:.3f} seconds")
+
+
+def generate(args, model, tokenizer):
+    input("Press Enter to start generation")
+    print("---------")
+    print(args.prompt)
+    x = mx.array([[tokenizer.bos_id()] + tokenizer.encode(args.prompt)])
+    skip = 0
+    prompt_processing = None
+    tokens = []
+    start = tic()
+    for token in model.generate(x=x, temp=args.temp):
+        tokens.append(token)
+
+        if len(tokens) == 1:
+            # Actually, perform the computation to measure the prompt processing time
+            mx.eval(token)
+            prompt_processing = toc("Prompt processing", start)
+
+        if len(tokens) >= args.max_tokens:
+            break
+
+        elif (len(tokens) % args.write_every) == 0:
+            mx.eval(token)
+            s = tokenizer.decode([t.item() for t in tokens])
+            print(s[skip:], end="", flush=True)
+            skip = len(s)
+
+    mx.eval(tokens)
+    full_gen = toc("Full generation", start)
+    s = tokenizer.decode([t.item() for t in tokens])
+    print(s[skip:], flush=True)
+    print("---------")
+    print(prompt_processing)
+    print(full_gen)
+
+
+def sanitize_config(config, weights):
+    config.pop("model_type", None)
+    n_heads = config["n_heads"]
+    if "n_kv_heads" not in config:
+        config["n_kv_heads"] = n_heads
+    if "head_dim" not in config:
+        config["head_dim"] = config["dim"] // n_heads
+    if "hidden_dim" not in config:
+        # TODO: Check if this is correct
+        config["hidden_dim"] = weights["layers.0.feed_forward.w1.weight"].shape[0]
+    if "vocab_size" not in config:
+        config["vocab_size"] = weights["output.weight"].shape[0]
+    if "rope_theta" not in config:
+        config["rope_theta"] = 10_000
+    unused = ["multiple_of", "ffn_dim_multiplier"]
+    for k in unused:
+        config.pop(k, None)
+    return config
+
+
+def load_model(model_path):
+    model_path = Path(model_path)
+
+    unsharded_weights_path = Path(model_path / "weights.npz")
+    if unsharded_weights_path.is_file():
+        print("[INFO] Loading model from {}".format(unsharded_weights_path))
+        weights = mx.load(str(unsharded_weights_path))
+    else:
+        sharded_weights_glob = str(model_path / "weights.*.npz")
+        weight_files = glob.glob(sharded_weights_glob)
+
+        if len(weight_files) == 0:
+            raise FileNotFoundError("No weights found at {}".format(model_path))
+
+        print("[INFO] Loading model from {} shards".format(len(weight_files)))
+
+        weights = {}
+        for wf in weight_files:
+            weights.update(mx.load(wf).items())
+
+    # Load the model arguments from config.json file
+    with open(model_path / "config.json", "r") as f:
+        config = json.loads(f.read())
+        config = sanitize_config(config, weights)
+        quantization = config.pop("quantization", None)
+
+    print("[INFO] Model config: {}".format(config))
+    model = Llama(args=ModelArgs(**config))
+    if quantization is not None:
+        nn.QuantizedLinear.quantize_module(
+            model=model,
+            group_size=quantization["group_size"],
+            bits=quantization["bits"]
+        )
+    weights = tree_unflatten((list(weights.items())))
+    model.update(weights)
+    tokenizer = SentencePieceProcessor(model_file=str(model_path / "tokenizer.model"))
+    return model, tokenizer
