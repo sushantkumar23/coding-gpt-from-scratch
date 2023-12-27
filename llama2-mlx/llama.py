@@ -64,9 +64,9 @@ class Attention(nn.Module):
         # cache: (k, v) -> (batch, seq_len, n_kv_heads, head_dim)
         B, L, D = x.shape
 
-        # queries: x(batch, seq_len, dim) x wq(dim, n_heads * head_dim) = (batch, seq_len, n_heads * head_dim)
-        # keys: x(batch, seq_len, dim) x wk(dim, n_kv_heads * head_dim) = (batch, seq_len, n_kv_heads * head_dim)
-        # values: x(batch, seq_len, dim) x wv(dim, n_kv_heads * head_dim) = (batch, seq_len, n_kv_heads * head_dim)
+        # queries: wq(n_heads * head_dim, dim) * x(batch, seq_len, dim) = (batch, seq_len, n_heads * head_dim)
+        # keys: wk(n_kv_heads * head_dim, dim) * x(batch, seq_len, dim) = (batch, seq_len, n_kv_heads * head_dim)
+        # values: wv(n_kv_heads * head_dim, dim) * x(batch, seq_len, dim) = (batch, seq_len, n_kv_heads * head_dim)
         queries, keys, values = self.wq(x), self.wk(x), self.wv(x)
 
         # Prepare the queries, keys and values for the attention computation
@@ -118,7 +118,7 @@ class Attention(nn.Module):
         # (...).transpose(0, 2, 1, 3) -> (batch, seq_len, n_heads, head_dim)
         # (...).reshape(B, L, -1) -> (batch, seq_len, dim)
         output = (scores @ values).transpose(0, 2, 1, 3).reshape(newshape=[B, L, -1])
-        # (batch, seq_len, dim) x wo(dim, dim) -> (batch, seq_len, dim)
+        # wo(dim, dim) * output(batch, seq_len, dim) -> (batch, seq_len, dim)
         return self.wo(output), (keys, values)
 
 
@@ -132,10 +132,10 @@ class FeedForward(nn.Module):
 
     def __call__(self, x: mx.array) -> mx.array:
         # x: (batch, seq_len, dim)
-        # nn.silu(self.w1(x)): (batch, seq_len, dim) x w1(dim, hidden_dim) -> (batch, seq_len, hidden_dim)
-        # self.w3(x): (batch, seq_len, dim) x w3(dim, hidden_dim) -> (batch, seq_len, hidden_dim)
+        # nn.silu(self.w1(x)): w1(hidden_dim, dim) * x(batch, seq_len, dim) x -> (batch, seq_len, hidden_dim)
+        # self.w3(x):  w3(hidden_dim, dim) * x(batch, seq_len, dim)  -> (batch, seq_len, hidden_dim)
         # nn.silu(self.w1(x)) * self.w3(x) -> (batch, seq_len, hidden_dim) * (batch, seq_len, hidden_dim)
-        # -> (batch, seq_len, hidden_dim) x w2(hidden_dim, dim) -> (batch, seq_len, dim)
+        # -> w2(dim, hidden_dim) * (batch, seq_len, hidden_dim)  -> (batch, seq_len, dim)
         return self.w2(nn.silu(self.w1(x)) * self.w3(x))
 
 
