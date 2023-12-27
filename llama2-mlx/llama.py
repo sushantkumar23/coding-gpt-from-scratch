@@ -2,6 +2,7 @@
 import time
 import glob
 import json
+import argparse
 from pathlib import Path
 from typing import Optional, Tuple
 from dataclasses import dataclass
@@ -347,3 +348,50 @@ def load_model(model_path):
     model.update(weights)
     tokenizer = SentencePieceProcessor(model_file=str(model_path / "tokenizer.model"))
     return model, tokenizer
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model_path",
+        default="mlx_model",
+        type=str,
+        help="Path to the model weights and tokenizer"
+    )
+    parser.add_argument(
+        "--prompt",
+        default="In the beginning the universe was created",
+        type=str,
+        help="The prompt to be used for generation. Ignored if --few-shot is provided"
+    )
+    parser.add_argument(
+        "--max-tokens",
+        "-m",
+        default=100,
+        type=int,
+        help="The maximum number of tokens to generate"
+    )
+    parser.add_argument(
+        "--write-every",
+        default=1,
+        type=int,
+        help="Number of tokens to generate before detokenization and printing"
+    )
+    parser.add_argument(
+        "--temp",
+        default=0.0,
+        type=float,
+        help="The sampling temperature"
+    )
+    parser.add_argument(
+        "--seed",
+        default=0,
+        type=int,
+        help="The PRNG seed"
+    )
+
+    args = parser.parse_args()
+    mx.random.seed(args.seed)
+
+    model, tokenizer = load_model(args.model_path)
+    generate(args, model, tokenizer)
