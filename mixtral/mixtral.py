@@ -12,6 +12,7 @@ import mlx.nn as nn
 from mlx.utils import tree_unflatten
 from sentencepiece import SentencePieceProcessor
 
+
 @dataclass
 class ModelArgs:
     dim: int
@@ -44,6 +45,21 @@ class RoPE(nn.RoPE):
 
     def __init__(self, dims: int, traditional: bool = False):
         super().__init__(dims, traditional=traditional)
+
+    def __call__(self, x, offset: int = 0):
+        shape = x.shape
+        x = mx.reshape(x, (-1, shape[-2], shape[1]))
+        N = x.shape[1] + offset
+        costheta, sintheta = RoPE.create_cos_sin_theta(
+            N, self.dims, offset=offset, base=1_000_000, dtype=x.dtype
+        )
+
+        rope = (
+            self._compute_traditional_rope if self.traditional else self._compute_rope
+        )
+        rx = rope(costheta, sintheta, x)
+
+        return mx.reshape(rx, shape)
 
 
 class Attention(nn.Module):
@@ -116,6 +132,9 @@ class FeedForward(nn.Module):
         self.w2 = nn.Linear(input_dims=args.hidden_dim, output_dims=args.dim, bias=False)
         self.w3 = nn.Linear(input_dims=args.dim, output_dims=args.hidden_dim, bias=False)
 
+    def __call__(self, x) -> mx.array:
+        return self.w2(nn.silu(self.w1(x)) * self.w3(x))
+
 
 class MOEFeedForward(nn.Module):
 
@@ -126,6 +145,27 @@ class MOEFeedForward(nn.Module):
         self.num_experts_per_tok = args.moe["num_experts_per_tok"]
         self.experts = [FeedForward(args=args) for _ in range(self.num_experts)]
         self.gate = nn.Linear(input_dims=args.dim, output_dims=self.num_experts, bias=False)
+
+    def __call__(self, x) -> mx.array:
+        ne = self.num_experts_per_tok
+        orig_shape = x.shape
+        x = x.reshape(-1, x.shape[-1])
+
+        gates = self.gate(x)
+        inds = mx.argpartition(-gates, kth=ne, axis=-1)[:, :ne]
+        scores = mx.softmax(
+            mx.take_along_axis(gates, inds, axis=-1).astype(mx.float32),
+            axis=-1
+        ).astype(gates.dtype)
+
+        y = []
+        for xt, st, it in zip(x, scores, inds.tolist()):
+            yt = mx.concatenate([self.experts[e](xt)[:, None] for e in it], axis=-1)
+            yt = (yt * st).sum(axis=-1)
+            y.append(yt[None, :])
+        y = mx.concatenate(y)
+
+        return y.reshape(orig_shape)
 
 
 class MOETransformerBlock(nn.Module):
@@ -148,6 +188,10 @@ class MOETransformerBlock(nn.Module):
         cache: Optional[Tuple[mx.array, mx.array]] = None
     ) -> mx.array:
         r, cache = self.attention(self.attention_norm(x), mask, cache)
+        h = x + r
+        r = self.feed_forward(self.ffn_norm(h))
+        out = h + r
+        return out, cache
 
 
 class Mixtral(nn.Module):
