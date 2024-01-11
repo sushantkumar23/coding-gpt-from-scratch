@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import mlx.core as mx
 import mlx.nn as nn
 from mlx.utils import tree_unflatten
-
+from sentencepiece import SentencePieceProcessor
 
 @dataclass
 class ModelArgs:
@@ -22,6 +22,14 @@ class ModelArgs:
     norm_eps: float
     vocab_size: int
     moe: dict = None
+
+
+class RMSNorm(nn.Module):
+
+    def __init__(self, dims: float, eps: float = 1e-5):
+        super().__init__()
+        self.weight = mx.ones((dims,))
+        self.eps = eps
 
 
 class RoPE(nn.RoPE):
@@ -50,21 +58,45 @@ class Attention(nn.Module):
         self.rope = RoPE(args.head_dim, traditional=False)
 
 
+class FeedForward(nn.Module):
+
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+
+        self.w1 = nn.Linear(input_dims=args.dim, output_dims=args.hidden_dim, bias=False)
+        self.w2 = nn.Linear(input_dims=args.hidden_dim, output_dims=args.dim, bias=False)
+        self.w3 = nn.Linear(input_dims=args.dim, output_dims=args.hidden_dim, bias=False)
+
+
+class MOEFeedForward(nn.Module):
+
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+
+        self.num_experts = args.moe["num_experts"]
+        self.num_experts_per_tok = args.moe["num_experts_per_tok"]
+        self.experts = [FeedForward(args=args) for _ in range(self.num_experts)]
+        self.gate = nn.Linear(input_dims=args.dim, output_dims=self.num_experts, bias=False)
+
 
 class MOETransformerBlock(nn.Module):
 
     def __init__(self, args: ModelArgs):
         super().__init__()
+
         self.n_heads = args.n_heads
         self.dim = args.dim
         self.attention = Attention(args=args)
-
-
+        self.feed_forward = MOEFeedForward(args=args)
+        self.attention_norm = RMSNorm(dims=args.dim, eps=args.norm_eps)
+        self.ffn_norm = RMSNorm(dims=args.dim, eps=args.norm_eps)
+        self.args = args
 
 class Mixtral(nn.Module):
 
     def __init__(self):
         super().__init__()
+
         self.args = args
         self.vocab_size = args.vocab_size
         assert self.vocab_size > 0
@@ -73,10 +105,17 @@ class Mixtral(nn.Module):
         self.layers = [
             MOETransformerBlock(args=args) for _ in range(self.n_layers)
         ]
+        self.norm = RMSNorm(dims=args.dim, eps=args.norm_eps)
+        self.output = nn.Linear(input_dims=args.dim, output_dims=self.vocab_size, bias=False)
 
 
 class Tokenizer:
-    pass
+
+    def __init__(self, model_path: str):
+        assert Path(model_path).exists(), model_path
+        self._model = SentencePieceProcessor(model_file=model_path)
+        self._sep = "_"
+        assert self._model.vocab_size == self._model.get_piece_size()
 
 
 def load_model(folder: str):
