@@ -245,6 +245,12 @@ class Tokenizer:
     def encode(self, s: str) -> List[int]:
         return [self._model.bos_id(), *self._model.encode(s)]
 
+    def decode(self, t: List[int]) -> str:
+        out = self._model.decode(t)
+        if t and self._model.id_to_piece(t[0])[0] == self._sep:
+            return " " + out
+        return out
+
 
 def load_model(folder: str):
     model_path = Path(folder)
@@ -281,6 +287,11 @@ def generate(prompt: mx.array, model: Mixtral, temp: Optional[float] = 0.0):
     y = sample(logits[:, -1, :])
     yield y
 
+    while True:
+        logits, cache = model(y[:, None], cache)
+        y = sample(logits.squeeze(1))
+        yield y
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Mixtral inference script")
@@ -290,6 +301,24 @@ if __name__ == "__main__":
         type=str,
         default="mlx_model",
         help="The path to the models weights, tokenizer and config"
+    )
+    parser.add_argument(
+        "--prompt",
+        help="The message to be processed by the model",
+        default="In the beginning, the universe was created."
+    )
+    parser.add_argument(
+        "--max-tokens",
+        "-m",
+        type=int,
+        default=100,
+        help="Maximum number of tokens to generate"
+    )
+    parser.add_argument(
+        "--temp",
+        help="The sampling temperature",
+        type=float,
+        default=0.0
     )
 
     parser.add_argument("--seed", type=int, default=0, help="The PRNG seed")
@@ -304,3 +333,23 @@ if __name__ == "__main__":
     print(args.prompt, end="", flush=True)
     prompt = mx.array(tokenizer.encode(args.prompt))
     tokens = []
+
+    for token, _ in zip(generate(prompt, model, args.temp), range(args.max_tokens)):
+        tokens.append(token)
+
+        if (len(tokens) % 10) == 0:
+            mx.eval(tokens)
+            eos_index = next(
+                (i for i, t in enumerate(tokens) if t.item() == tokenizer.eos_id), None
+            )
+            if eos_index is not None:
+                tokens = tokens[:eos_index]
+            s = tokenizer.decode([t.item() for t in tokens])
+            print(s, end="", flush=True)
+            tokens = []
+            if eos_index is not None:
+                break
+
+    mx.eval(tokens)
+    s = tokenizer.decode([t.item() for t in tokens])
+    print(s, flush=True)
