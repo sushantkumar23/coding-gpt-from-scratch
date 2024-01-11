@@ -225,6 +225,8 @@ class Mixtral(nn.Module):
         for e, layer in enumerate(self.layers):
             h, cache[e] = layer(h, mask, cache[e])
 
+        return self.output(self.norm(h[:, T - 1 : T, :])), cache
+
 
 class Tokenizer:
 
