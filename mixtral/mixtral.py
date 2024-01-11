@@ -5,6 +5,7 @@ import glob
 import json
 from pathlib import Path
 from dataclasses import dataclass
+from typing import Optional, List, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -31,6 +32,13 @@ class RMSNorm(nn.Module):
         self.weight = mx.ones((dims,))
         self.eps = eps
 
+    def _norm(self, x):
+        return x * mx.rsqrt(x.square().mean(-1, keepdims=True) + self.eps)
+
+    def __call__(self, x):
+        output = self._norm(x.astype(mx.float32)).astype(x.dtype)
+        return self.weight * output
+
 
 class RoPE(nn.RoPE):
 
@@ -56,6 +64,47 @@ class Attention(nn.Module):
         self.wv = nn.Linear(input_dims=args.dim, output_dims=args.n_kv_heads * args.head_dim, bias=False)
         self.wo = nn.Linear(input_dims=args.n_heads * args.head_dim, output_dims=args.dim, bias=False)
         self.rope = RoPE(args.head_dim, traditional=False)
+
+    def __call__(
+        self,
+        x: mx.array,
+        mask: Optional[mx.array] = None,
+        cache: Optional[Tuple[mx.array, mx.array]] = None
+    ) -> mx.array:
+        B, L, D = x.shape
+
+        queries = self.wq(x),
+        keys = self.wk(x)
+        values = self.wv(x)
+
+        # Prepare the queries, keys and values for the attention computation
+        queries = queries.reshape(B, L, self.n_heads, -1).transpose(0, 2, 1, 3)
+        keys = keys.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
+        values = values.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
+
+        def repeat(a):
+            a = mx.concatenate([mx.expand_dims(a, 2)] * self.repeats, axis=2)
+            return a.reshape([B, self.n_heads, L, -1])
+
+        key, values = map(repeat, (keys, values))
+
+        if cache is not None:
+            key_cache, value_cache = cache
+            queries = self.rope(queries, offset=key_cache.shape[2])
+            keys = self.rope(keys, offset=key_cache.shape[2])
+            keys = mx.concatenate([key_cache, keys], axis=2)
+            values = mx.concatenate([value_cache, values], axis=2)
+        else:
+            queries = self.rope(queries)
+            keys = self.rope(keys)
+
+        scores = (queries * self.scale) @ keys.transpose(0, 1, 3, 2)
+        if mask is not None:
+            scores += mask
+
+        scores = mx.softmax(scores.astype(mx.float32), axis=-1).astype(scores.dtype)
+        output = (scores @ values).transpose(0, 2, 1, 3).reshape(B, L, -1)
+        return self.wo(output), (keys, values)
 
 
 class FeedForward(nn.Module):
@@ -92,6 +141,15 @@ class MOETransformerBlock(nn.Module):
         self.ffn_norm = RMSNorm(dims=args.dim, eps=args.norm_eps)
         self.args = args
 
+    def __call__(
+        self,
+        x: mx.array,
+        mask: Optional[mx.array] = None,
+        cache: Optional[Tuple[mx.array, mx.array]] = None
+    ) -> mx.array:
+        r, cache = self.attention(self.attention_norm(x), mask, cache)
+
+
 class Mixtral(nn.Module):
 
     def __init__(self):
@@ -108,6 +166,21 @@ class Mixtral(nn.Module):
         self.norm = RMSNorm(dims=args.dim, eps=args.norm_eps)
         self.output = nn.Linear(input_dims=args.dim, output_dims=self.vocab_size, bias=False)
 
+    def __call__(self, inputs: mx.array, cache=None):
+        h = self.tok_embeddings(inputs)
+
+        mask = None
+        T = h.shape[1]
+        if T > 1:
+            mask = nn.MultiHeadAttention.create_additive_causal_mask(T)
+            mask = mask.astype(h.dtype)
+
+        if cache is None:
+            cache = [None] * len(self.layers)
+
+        for e, layer in enumerate(self.layers):
+            h, cache[e] = layer(h, mask, cache[e])
+
 
 class Tokenizer:
 
@@ -116,6 +189,17 @@ class Tokenizer:
         self._model = SentencePieceProcessor(model_file=model_path)
         self._sep = "_"
         assert self._model.vocab_size == self._model.get_piece_size()
+
+    @property
+    def eos_id(self) -> int:
+        return self._model.eos_id()
+
+    @property
+    def pad_id(self) -> int:
+        return self._model.pad_id()
+
+    def encode(self, s: str) -> List[int]:
+        return [self._model.bos_id(), *self._model.encode(s)]
 
 
 def load_model(folder: str):
@@ -132,6 +216,26 @@ def load_model(folder: str):
         weights.update(mx.load(wf).items())
     weights = tree_unflatten(list(weights.items()))
     model = Mixtral(model_args)
+    if quantization is not None:
+        quantization["linear_class_predicate"] = (
+            lambda m: isinstance(m, nn.Linear) and m.weight.shape[0] != 8
+        )
+        nn.QuantizedLinear.quantize_module(model, **quantization)
+
+    model.update(weights)
+    return model, tokenizer
+
+
+def generate(prompt: mx.array, model: Mixtral, temp: Optional[float] = 0.0):
+    def sample(logits):
+        if temp == 0:
+            return mx.argmax(logits, axis=-1)
+        else:
+            return mx.random.categorical(logits * (1 / temp))
+
+    logits, cache = model(prompt[None])
+    y = sample(logits[:, -1, :])
+    yield y
 
 
 if __name__ == "__main__":
@@ -150,3 +254,9 @@ if __name__ == "__main__":
     mx.random.seed(args.seed)
     print("[INFO] Loading model from disk...")
     model, tokenizer = load_model(args.model_path)
+
+    print("[INFO] Starting generation...")
+
+    print(args.prompt, end="", flush=True)
+    prompt = mx.array(tokenizer.encode(args.prompt))
+    tokens = []
