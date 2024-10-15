@@ -26,6 +26,7 @@ class Sampler(nn.Module):
         top_ks: torch.Tensor,
         embedding_bias: Optional[torch.Tensor] = None,
     ):
+        
 
 
 @dataclass
